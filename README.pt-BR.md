@@ -90,8 +90,8 @@ Você toca no ícone e cai no VS Code. Só isso.
 O repositório guarda só o código-fonte (~120 KB). Os binários que entram no APK (Ubuntu, code-server, Node.js, `gh`, proot…) são baixados por um script.
 
 ```bash
-git clone https://github.com/<voce>/codedroid.git
-cd codedroid
+git clone https://github.com/<seu-usuario>/coder-droid.git
+cd coder-droid
 
 # 1. baixa tudo o que o APK embute (≈ 300 MB por arquitetura)
 python scripts/fetch_assets.py --abi arm64      # celulares/tablets  (ou: --abi x64 / --abi all)
