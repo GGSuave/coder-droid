@@ -1,0 +1,26 @@
+# ---- Signing: NEVER commit these ------------------------------------------------
+keystore.properties
+*.jks
+*.keystore
+*.p12
+
+# ---- Build output ---------------------------------------------------------------
+build/
+.gradle/
+.kotlin/
+*.apk
+*.aab
+*.ap_
+
+# ---- Binaries downloaded by scripts/fetch_assets.py (hundreds of MB) -------------
+app/src/*/assets/
+app/src/*/jniLibs/
+
+# ---- IDE / OS -------------------------------------------------------------------
+.idea/
+*.iml
+local.properties
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
