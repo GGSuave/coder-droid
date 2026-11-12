@@ -90,7 +90,7 @@ You tap the icon and land in VS Code. That's it.
 The repository holds only the source (~120 KB). The binaries that go into the APK (Ubuntu, code-server, Node.js, `gh`, proot…) are downloaded by a script.
 
 ```bash
-git clone https://github.com/<your-user>/coder-droid.git
+git clone https://github.com/GGSuave/coder-droid.git
 cd coder-droid
 
 # 1. download everything the APK embeds (≈ 300 MB per architecture)
