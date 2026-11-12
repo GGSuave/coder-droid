@@ -1,143 +1,147 @@
-# CodeDroid
+# CodeDroid Java
 
-**A full VS Code, a Linux terminal, Node.js and Git — running 100% locally inside a single Android APK.**
-No server to set up, no Termux session to log into, no browser tab to keep open.
+**A complete Java IDE that runs 100% locally on your Android phone or tablet: JDK 25, Maven, Gradle and a real language server, in a single APK.**
+No server to set up, no Termux session, no browser tab.
 
 > 🇧🇷 [Leia em português](README.pt-BR.md)
 >
-> 🤖 **Built with [Claude](https://claude.com/claude-code)** — this whole project was designed, written, debugged and tested by Claude (Anthropic) in [Claude Code](https://claude.com/claude-code), directed by its author through conversation. See [Built with Claude](#built-with-claude).
+> 🌿 This is the **`java-ide`** branch. The original **CodeDroid** (VS Code running inside an APK) lives on the [`main`](https://github.com/GGSuave/coder-droid/tree/main) branch.
+>
+> 🤖 **Built with [Claude](https://claude.com/claude-code)**: designed, written, debugged and tested by Claude (Anthropic) in [Claude Code](https://claude.com/claude-code), directed by its author through conversation. See [Built with Claude](#built-with-claude).
 
 ---
 
 ## What is it?
 
-Android phones and tablets are powerful, but their built-in "terminal" cannot install or run real
-development tools. CodeDroid bundles a complete Linux userland and the VS Code editor into one app, so you can
-open a folder, edit code with extensions, run `npm`, `git` and dev servers, all on the device, offline.
+A Java-only IDE built for the touchscreen. You create a Maven or Gradle project, edit with code completion and live error checking, press **▶ Run**, and see the program's output. Everything, including the compiler, the build tools and the language server, is inside the app.
 
-You tap the icon and land in VS Code. That's it.
+It reuses the idea of CodeDroid (a full Ubuntu userland inside the app through `proot`), but instead of VS Code it has its **own interface** built on the [Monaco](https://microsoft.github.io/monaco-editor/) editor, talking to the [Eclipse JDT Language Server](https://github.com/eclipse-jdtls/eclipse.jdt.ls).
 
 ## Highlights
 
-- **Real VS Code** ([code-server](https://github.com/coder/code-server)): extensions (Open VSX), integrated terminal, Git panel, search, debugger UI.
-- **A real Ubuntu 24.04 userland** with `apt`, so `apt install openjdk-21-jdk`, `python3`, `build-essential`… just work.
-- **Node.js (LTS) + npm, Git and the GitHub CLI (`gh`)** pre-installed. Verified: `npm create vite` → `npm install` → dev server answering `HTTP 200`.
-- **Made for touch and for tablets**: always landscape (both sides, like a game), a key bar (Copy, Paste, Esc, Tab, Ctrl-C, arrows…) that only shows with the on-screen keyboard and no physical keyboard, working copy/paste.
-- **Links open where you expect**: a `localhost:3000` link clicked in the terminal opens in **Chrome**, not inside the editor.
-- **Remembers your folder** and reopens it next time.
-- **Behaves like a good Android app**: closing the window in the app switcher stops the server, every terminal and every dev server. The notification has a *Stop* button. A themed (Android 13+) adaptive icon.
-- **Resilient**: if Android kills the WebView's renderer (common when you switch to the browser), the app rebuilds the page and reconnects to your still-running terminals instead of crashing.
-- **Self-contained**: the editor, Node, `gh` and CA certificates are inside the APK. Only `git` (via `apt`) needs internet, once, on first run.
+- **Real Java tooling:** Temurin **JDK 25**, **Maven 3.9**, **Gradle 9.9** and the Eclipse JDT language server, all bundled.
+- **Language features (via LSP):** live compile errors, code completion with auto-import, hover documentation, quick fixes, go to definition (even into the JDK sources), references, rename, formatting, organize imports.
+- **Run / Compile / Test / Stop** for Maven, Gradle and single `.java` files. Output goes to a console where file locations are clickable.
+- **Console input:** programs that read the keyboard (`Scanner`) work: type in the console and press Enter.
+- **Project wizard:** Maven or Gradle app with a JUnit 5 test, or a plain Java file.
+- **Made for touch and for tablets:** landscape layout, a symbol bar (`{ } ( ) [ ] ; " < >`, arrows, copy/paste…) that shows only with the on-screen keyboard and no physical keyboard, working copy/paste, dark and light themes.
+- **Problems panel, terminal (one command at a time) and file tree** with create / rename / delete.
+- **No network port.** The UI talks to the app through an internal WebView bridge (see [Security](#security)).
+- **Behaves like a good Android app:** closing the window in the app switcher stops the language server and every build. The notification has a *Stop* button.
 
 ## How it works
 
 ```
-┌──────────────────────────── Android app  (dev.codedroid) ────────────────────────────┐
-│                                                                                       │
-│  MainActivity ── WebView ───────────────▶  http://127.0.0.1:18080   (the VS Code UI)  │
-│     ├ ClipboardBridge   (navigator.clipboard ⇄ Android clipboard, origin-restricted)  │
-│     ├ link router       (localhost / external links → Chrome)                         │
-│     └ key bar, orientation, last-folder memory, renderer-crash recovery               │
-│                                                                                       │
-│  ServerService  (foreground service, wake lock, notification)                         │
-│     └─ spawns ▶  libproot.so            ← exec'd from nativeLibraryDir (see below)     │
-│                    └─ rootfs/   (Ubuntu 24.04, lives in the app's private files dir)  │
-│                         ├ /opt/code-server/     VS Code server (HTTP, no auth, local)  │
-│                         ├ /usr/local/bin/       node  npm  npx  gh                     │
-│                         ├ /usr/bin/git          installed with apt on first run        │
-│                         └ /root/workspace       your projects  (kept across updates)  │
-└───────────────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────── Android app  (dev.codedroid.java) ───────────────────────────┐
+│                                                                                         │
+│  WebView ── https://appassets.androidplatform.net/assets/web/   (HTML/JS, no server)    │
+│     Monaco editor · file tree · tabs · console · problems · terminal · LSP client       │
+│        ▲                                                                                │
+│        │  WebMessageListener "ideBridge"  (JSON-RPC, restricted to the app's origin)    │
+│        ▼                                                                                │
+│  Kotlin backend                                                                         │
+│     FileApi      read/write files under /root (path-checked)                            │
+│     JobManager   runs mvn / gradle / java, streams output, kills the whole tree         │
+│     LspSession   runs the JDT language server over stdio and forwards the messages      │
+│        │                                                                                │
+│        └─ spawns ▶ libproot.so   ← exec'd from nativeLibraryDir (see below)             │
+│                       └─ rootfs/   Ubuntu 24.04 in the app's private files dir          │
+│                            ├ /opt/jdk  /opt/maven  /opt/gradle  /opt/jdtls              │
+│                            └ /root/projects        your projects (kept across updates)  │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**First launch** (`Installer.kt`)
-1. Unpacks the bundled Ubuntu base, code-server and Node.js tarballs into the app's private storage (no root needed).
-2. Writes the small bits of config the sandbox needs (`resolv.conf`, `hosts`, a Node shim, VS Code defaults).
-3. Adds extras: CA certificates, GitHub CLI, Git credential config, and installs `git` through `apt` if there is internet.
+**First launch** (`Installer.kt`): unpacks the Ubuntu base and each tool (JDK, Maven, Gradle, language server) into the app's private storage, writes the small config files the sandbox needs, and installs `git` through `apt` if there is internet. Each component has its own version marker, so updating one tool doesn't redo the rest or erase what you installed.
 
-**Every launch**
-1. `ServerService` starts `libproot.so -r rootfs … code-server --bind-addr 127.0.0.1:18080 --auth none` as a child process.
-2. `MainActivity` polls `/healthz`, then loads the editor in a `WebView`.
+**Opening a project:** the UI starts the language server (`lsp.start`) and speaks the Language Server Protocol to it through the bridge. A compact LSP client (`js/lsp.js`) maps the server's answers onto Monaco's providers.
 
-**When you close the window**, `onTaskRemoved` stops the server and kills the whole process tree.
+**Running:** the **▶ Run** button saves everything, picks the build tool and runs, for example, `mvn -q compile org.codehaus.mojo:exec-maven-plugin:3.5.0:java -Dexec.mainClass=…` or `gradle -q run`, streaming the output to the console.
 
 ### The Android problems this project had to solve
 
-| Problem | What happens | Solution |
-|---|---|---|
-| **W^X**: Android 10+ forbids executing files from an app's data dir for apps with `targetSdk ≥ 29` | `Permission denied` on any binary you unpack | Ship `proot` as `lib*.so` so it is installed in `nativeLibraryDir` (the one place apps may exec from), and keep `targetSdk = 28` like Termux does. **Consequence: not eligible for the Play Store.** |
-| No root, no `chroot` | Can't run a normal Linux userland | **proot** (user-space `chroot` via `ptrace`), the Termux build, which works under Android's seccomp policy. |
-| proot is linked to `libtalloc.so.2`, but `jniLibs` only accepts `lib*.so` | Linker can't find the dependency | `scripts/fetch_assets.py` renames the `DT_NEEDED` string in place (same length). |
-| Android hides `/proc/cpuinfo` and blocks netlink | `os.cpus()` is empty, `os.networkInterfaces()` throws; webpack/jest/esbuild and VS Code break | `/opt/android-shim.js`, loaded with `NODE_OPTIONS`, patches `os` and calls `syncBuiltinESMExports()` so ES modules see it too. |
-| WebView can't ask permission for `navigator.clipboard.readText()` | "Paste" from VS Code menus does nothing | `ClipboardBridge`: a `WebMessageListener` + document-start script replace `navigator.clipboard`, **restricted to the editor's origin** so sandboxed extension iframes can't read your clipboard. |
-| VS Code rewrites `localhost:3000` → `/proxy/3000/` on its own server | Clicking a dev-server link navigates the editor away | Main-frame navigations to `/proxy/<port>/…` are turned back into `http://localhost:<port>/…` and opened in Chrome. |
-| Android kills the WebView renderer under memory pressure; unhandled, **it kills the whole app** | Server and terminals die while you're in the browser | `onRenderProcessGone` rebuilds the WebView on the same URL; the server is untouched. |
-| VS Code's built-in "GitHub" extension pops a *"sign in to GitHub"* modal (`createIfNone: true`) | Login modal after clone / pull | The extension is removed; login is `gh auth login` or a token in the terminal. Git is preconfigured to store credentials. |
-| `Process.destroy()` didn't reliably stop proot's children | Orphaned `node` processes after closing | After stopping, the service walks `/proc` and `SIGKILL`s every descendant. |
-| A half-finished first install (battery died, app killed) | App starts with a broken rootfs | `sync` before marking success, and on every launch essential files are verified; a broken install redoes itself. |
+| Problem | Solution |
+|---|---|
+| **W^X**: Android 10+ forbids running files from an app's data dir (apps with `targetSdk ≥ 29`) | `proot` ships as `lib*.so` so it lands in `nativeLibraryDir`, the one place apps may exec from; `targetSdk = 28`, like Termux. **Not eligible for the Play Store.** |
+| No root, no `chroot` | **proot** (the Termux build), user-space `chroot` that works under Android's seccomp policy. |
+| `proot` with `PROOT_NO_SECCOMP=1` is ~10× slower (`javac` 9.9 s vs 0.8 s) | The app never sets it; proot uses its seccomp acceleration. |
+| Latest JDT LS requires **Java 25**, but Ubuntu 24.04 only has 21 | Bundles the Temurin 25 tarball instead of using `apt`. |
+| `Process.destroy()` does not stop proot's children | Every job gets a `CD_JOB=n` marker inherited by its children; stopping scans `/proc` and `SIGKILL`s everything with the marker. The service also kills the whole process tree when the window is closed. |
+| Android kills the WebView renderer under memory pressure, and that **kills the whole app** | `onRenderProcessGone` rebuilds the WebView; the language server and builds are untouched. |
+| Monaco 0.57 ships workers as ES modules with hashed names | `fetch_assets.py` gives the editor worker a stable name and drops the unused language-service workers. |
+| A phone in landscape is only ~364 CSS px tall | Compact layout: tabs and actions share one row, the bottom panel opens on demand, and the on-screen keyboard hides the bars. |
 
 ## Requirements
 
 | | |
 |---|---|
-| Device | Android **8.0+** (API 26). **arm64** phones/tablets use the `arm64` flavor; the `x64` flavor is for emulators / x86_64 devices. |
-| Tested on | Android 15 (x86_64 emulator) and a real arm64 phone. Other versions/devices are untested. |
-| Space | ~330 MB for the APK and about **1.5 GB** free once it unpacks. |
-| RAM | 6 GB or more recommended. VS Code + Node dev servers are not light. |
-| Build host | JDK 17+ (the JDK bundled with Android Studio works), Android SDK (platform **36**, build-tools), **Python 3.14+** (or 3.9+ with `pip install zstandard`), internet. |
+| Device | Android **8.0+** (API 26). **arm64** phones/tablets use the `arm64` flavor; `x64` is for emulators. |
+| Tested on | Android 15 on an x86_64 emulator. The arm64 build is new and still being tested on real hardware. |
+| Space | ~350 MB for the APK and roughly 1 GB once unpacked, plus your projects and the Maven/Gradle caches. |
+| RAM | 6 GB or more recommended (the language server uses up to 1 GB). |
+| Build host | JDK 17+ (Android Studio's works), Android SDK (platform **36**), **Python 3.9+**, internet. |
 
 ## Build from source
 
-The repository holds only the source (~120 KB). The binaries that go into the APK (Ubuntu, code-server, Node.js, `gh`, proot…) are downloaded by a script.
+The repository holds only source (~250 KB). The binaries that go into the APK (Ubuntu, JDK, Maven, Gradle, language server, Monaco, proot) are downloaded by a script.
 
 ```bash
-git clone https://github.com/GGSuave/coder-droid.git
+git clone -b java-ide https://github.com/GGSuave/coder-droid.git
 cd coder-droid
 
-# 1. download everything the APK embeds (≈ 300 MB per architecture)
+# 1. download everything the APK embeds (≈ 400 MB per architecture)
 python scripts/fetch_assets.py --abi arm64      # phones/tablets  (or: --abi x64 / --abi all)
 
-# 2. build a debug APK (signed with the debug key; fine for personal use)
+# 2. build a debug APK
 ./gradlew :app:assembleArm64Debug               # Windows: gradlew.bat ...
 
 # 3. install
 adb install app/build/outputs/apk/arm64/debug/app-arm64-debug.apk
 ```
 
-Point Gradle at your SDK with `ANDROID_HOME`, or a `local.properties` file containing `sdk.dir=/path/to/Android/sdk`.
+Point Gradle at your SDK with `ANDROID_HOME`, or a `local.properties` file with `sdk.dir=/path/to/Android/sdk`.
 
 ### A signed release
 
 ```bash
-cp keystore.properties.example keystore.properties   # then edit it (it is git-ignored)
+cp keystore.properties.example keystore.properties   # then edit it (git-ignored)
 keytool -genkeypair -keystore codedroid-release.jks -alias codedroid -keyalg RSA -keysize 4096 -validity 10000
 ./gradlew :app:assembleArm64Release
 # → app/build/outputs/apk/arm64/release/app-arm64-release.apk
 ```
 
-> ⚠️ Keep the `.jks` and its passwords **outside** the repository and back them up. If you lose the key you cannot ship updates that install over an existing install.
-> Without `keystore.properties` the release build is produced unsigned.
+> ⚠️ Keep the `.jks` and its passwords **outside** the repository and back them up: without the key you can't ship updates that install over an existing install.
 
 ## Using it
 
-- **First open** takes about a minute (unpacking + installing `git`). After that it opens in a few seconds.
-- Android asks for **notification permission** (allow it, or you lose the *Stop* button) and offers a **battery optimisation exemption** (accept it, otherwise the system may stop the server in the background).
-- **Terminal:** the panel button in the top-right, or `` Ctrl+` ``. Tap-select text and it is copied automatically.
-- **GitHub login:** in the terminal run `gh auth login` → *GitHub.com* → *HTTPS* → *Yes* (authenticate Git) → *Login with a web browser*. Select the one-time code, press Enter, Chrome opens, paste, authorise, come back. After that `git pull`/`push` need no password. A personal access token also works: Git asks once and remembers it.
-- **More tools:** it's Ubuntu: `apt update && apt install openjdk-21-jdk python3 build-essential`.
-- **Close the app** from the app switcher to stop everything. The Back button only sends it to the background and leaves the server running.
-- **Updating** the APK (same signing key) keeps your `/root` (projects and settings). Things you installed with `apt` live in the system image; they are lost if a release has to rebuild the base system (`INSTALL_VERSION` in `Env.kt` changes). Back up what matters.
+1. **First open** takes about a minute. Allow notifications and accept the battery-optimisation exemption (otherwise Android may stop the language server in the background).
+2. Tap **Novo projeto**, pick *Maven* or *Gradle*, name it and tap **Criar**.
+3. Edit the code. Errors appear as you type; completion pops up after `.`. **Definição** and **Corrigir** are in the editor bar; **Mais ▾** has rename, format, organize imports and more.
+4. Tap **▶ Executar**. The console opens with the output. If the program reads input, type in the field at the bottom of the console.
+5. **✔ Testar** runs the JUnit tests. **🔨 Compilar** builds the project. **■ Parar** stops whatever is running.
+6. The first Maven/Gradle run needs internet to download plugins and dependencies.
+
+Updating the APK (same signing key) keeps your `/root` (projects and caches).
 
 ## Project layout
 
 ```
-app/src/main/kotlin/dev/codedroid/
-  MainActivity.kt      WebView host, key bar, link routing, crash recovery, last folder
-  ServerService.kt     foreground service: starts/stops the server and its whole process tree
-  Installer.kt         first-run unpacking, config, extras (gh, certs, git), settings merge
-  Proot.kt             builds the proot command line shared by the server and the installer
-  ClipboardBridge.kt   navigator.clipboard ⇄ Android clipboard, restricted by origin
-  Env.kt               paths and constants (port 18080, INSTALL_VERSION…)
-app/src/main/res/      adaptive + monochrome launcher icon, notification icon, theme
+app/src/main/kotlin/dev/codedroid/java/
+  MainActivity.kt   WebView host (asset loader, bridge), keyboard detection, renderer recovery
+  IdeBridge.kt      JSON-RPC bridge UI <-> app (files, jobs, LSP, clipboard)
+  FileApi.kt        file operations, limited to /root, symlink-safe delete
+  Jobs.kt           JobManager (mvn/gradle/java) and LspSession (JDT LS over stdio)
+  Installer.kt      first-run unpacking, versioned components, configuration, git via apt
+  Proot.kt          builds the proot command line (JAVA_HOME, PATH, ...)
+  Tools.kt          process-tree helpers (kill by marker / by descendants)
+  IdeService.kt     foreground service; stops everything when the window is closed
+app/src/main/assets/web/
+  index.html, style.css
+  js/bridge.js      call/event bridge, jobs, clipboard
+  js/editor.js      Monaco models, tabs, autosave, copy/paste
+  js/lsp.js         LSP client: diagnostics, completion, hover, definition, rename, code actions...
+  js/ui.js          file tree, panels, run/build/test, projects, settings, symbol bar
+  js/templates.js   Maven / Gradle / single-file project templates
+  js/app.js         entry point
 scripts/fetch_assets.py   downloads/stages every embedded binary
 ```
 
@@ -145,38 +149,39 @@ Two Gradle product flavors (`arm64`, `x64`) differ only in the binaries under `a
 
 ## Developer notes
 
-- Logs: `adb logcat -s codedroid-server codedroid-web` (server output, lifecycle, renderer recovery). This works in release builds too.
-- **Debug builds only** expose test hooks: `adb shell am start -n dev.codedroid/.MainActivity --es js '<javascript>'`, `--es cb_set <text>`, `--ez cb_get true`, `--es hw 0|1` (fake the physical-keyboard check), and a `files/launch.sh` that replaces the server command. They are ignored in release builds.
-- The code-server version, Node.js version and so on are pinned at the top of `scripts/fetch_assets.py`.
+- **Debug builds** load the UI from `files/webdev/` when it exists, so you can iterate on HTML/JS without rebuilding the APK: copy `app/src/main/assets/web/` there with `adb` and reload the page.
+- Debug builds also expose `window.__cdj` (the JS modules) and `adb shell am start -n dev.codedroid.java/.MainActivity --es js '<javascript>'` to run code in the page, plus `--es hw 0|1` to fake the physical-keyboard check. All of it is ignored in release builds.
+- Language-server log: `files/lsp.log` (debug builds can read it with `adb shell run-as`).
+- Component versions are pinned at the top of `scripts/fetch_assets.py` and in `Installer.kt`.
 
-## Troubleshooting
+## Known limitations
 
-- **The server dies in the background / terminals vanish.** Android 12+ may limit "phantom" child processes of apps. Accept the battery-optimisation exemption, and if it persists enable *Developer options → Disable child process restrictions* (Android 14+) or, over ADB, `adb shell settings put global settings_enable_monitor_phantom_procs false` (exact commands vary by Android version).
-- **White screen / "WebView failed repeatedly".** Update *Android System WebView* and *Chrome* in the Play Store.
-- **Error on first launch.** Free some storage and reopen; an interrupted install repairs itself.
-- Anything else: open an issue with the output of `adb logcat -s codedroid-server`.
+- **Not for the Play Store** (`targetSdk 28`). Distribute the APK directly.
+- **No debugger yet** (breakpoints, stepping). It is the biggest missing piece (planned: Java Debug Server + DAP).
+- **The terminal runs one command at a time** (no interactive programs); there is no pty yet.
+- **Touch editing in Monaco is unverified on real devices** (selection handles, autocorrect/IME quirks).
+- Gradle's daemon is stopped after each run to save memory, so each Gradle run starts cold (~12 s on the emulator).
+- proot adds overhead to file-heavy work (large dependency downloads and builds are slower than on a PC).
+- `git` is installed through `apt` on first run only if there is internet; otherwise the app retries on the next launch.
 
-## Known limitations & security
+### Security
 
-- **Not for the Play Store** (`targetSdk 28`, see above). Distribute the APK directly.
-- **The editor has no password.** code-server listens on `127.0.0.1:18080` with `--auth none`. Nothing outside the device can reach that address, but **any other app installed on the device can**, and the editor includes a terminal inside the sandbox with your projects and any stored Git token. Don't install untrusted apps next to this one. A per-install random password injected into the WebView is the obvious fix and is on the roadmap.
-- Processes in the sandbox run as *fake* root inside proot; this is **not** real root and does not escape the Android app sandbox.
-- proot adds overhead to file-heavy work (`npm install` of large trees is noticeably slower than on a PC).
-- Performance numbers quoted above were measured on an x86_64 emulator on a desktop PC; real devices will differ.
-- The Microsoft Marketplace is not available (code-server uses Open VSX); some proprietary extensions won't install.
+- No TCP port is opened: the UI reaches the backend only through the WebView bridge, which accepts messages only from the app's own origin.
+- File access is limited to `/root` inside the sandbox and refuses paths that escape it.
+- Processes run as *fake* root inside proot; this is **not** real root and does not escape the Android app sandbox.
 
-### Roadmap ideas
+### Roadmap
 
-Per-install authentication · optional Java pre-install · storage access (`/sdcard`) · multiple workspaces · CI that builds a release from tags.
+Debugger · interactive terminal (pty / xterm.js) · Git panel · Java versions other than 25 · import projects from storage.
 
 ## Built with Claude
 
-This project was created end to end by **Claude** (Anthropic, model *Claude Sonnet 5.5*) working in **Claude Code**, in a long conversation with its author who set the goals, tested on real hardware and reported what broke. Claude chose the architecture, wrote the Kotlin app and the tooling, set up the Android SDK and emulator, and debugged it by reading logs and measuring on the emulator.
+This project was created end to end by **Claude** (Anthropic, model *Claude Sonnet 5.5*) working in **Claude Code**, in a long conversation with its author, who set the goals, tested on real hardware and reported what broke. Claude validated the idea with a feasibility spike (JDK + language server inside proot), chose the architecture, wrote the Kotlin backend, the whole web UI and the build tooling, and debugged it by reading logs and measuring on an emulator.
 
-It is a good example of what AI-assisted development can do, and also a reminder to **review and test AI-written code before you trust it**, especially the security notes above.
+It is also a reminder to **review and test AI-written code before you trust it**.
 
 ## License
 
-[MIT](LICENSE) for the source code in this repository. The APK bundles third-party software under other licenses (including GPL components); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[MIT](LICENSE) for the source code in this repository. The APK bundles third-party software under other licenses (including GPL and EPL components); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-CodeDroid is an independent, unofficial project: not affiliated with Microsoft, Coder, Termux, Canonical, GitHub or the Node.js project.
+CodeDroid Java is an independent, unofficial project: not affiliated with Oracle, the Eclipse Foundation, Microsoft, Termux, Canonical, the Apache Software Foundation or Gradle Inc.
