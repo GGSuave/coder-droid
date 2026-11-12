@@ -11,17 +11,17 @@ val keystoreProps = Properties().apply {
 }
 
 android {
-    namespace = "dev.codedroid"
+    namespace = "dev.codedroid.java"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.codedroid"
+        applicationId = "dev.codedroid.java"
         minSdk = 26
         // Mantido em 28 de proposito: apps com targetSdk >= 29 nao podem dar exec em
         // binarios que estejam no armazenamento interno (W^X). Mesma estrategia do Termux.
         targetSdk = 28
-        versionCode = 7
-        versionName = "0.3.3"
+        versionCode = 1
+        versionName = "0.1.0"
     }
 
     signingConfigs {
@@ -43,7 +43,7 @@ android {
         }
     }
 
-    // Um APK por arquitetura: o rootfs e o code-server sao binarios nativos.
+    // Um APK por arquitetura: o rootfs e o JDK sao binarios nativos.
     flavorDimensions += "abi"
     productFlavors {
         create("arm64") {

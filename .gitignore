@@ -13,8 +13,13 @@ build/
 *.ap_
 
 # ---- Binaries downloaded by scripts/fetch_assets.py (hundreds of MB) -------------
-app/src/*/assets/
+# (the IDE's own web UI in app/src/main/assets/web/ IS source and stays tracked; only Monaco is fetched)
+app/src/arm64/assets/
+app/src/x64/assets/
 app/src/*/jniLibs/
+app/src/main/assets/*.bin
+app/src/main/assets/ca-certificates.crt
+app/src/main/assets/web/monaco/
 
 # ---- IDE / OS -------------------------------------------------------------------
 .idea/

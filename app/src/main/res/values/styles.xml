@@ -7,6 +7,6 @@
     </style>
     <color name="bg">#1E1E1E</color>
     <color name="fg">#CCCCCC</color>
-    <color name="accent">#007ACC</color>
-    <color name="ic_launcher_background">#0B3D91</color>
+    <color name="accent">#E76F00</color>
+    <color name="ic_launcher_background">#8A3B00</color>
 </resources>

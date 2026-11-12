@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>CodeDroid Java</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <button id="btn-sidebar" class="tb" aria-label="Arquivos">☰</button>
+    <button id="project-btn" class="tb project"><span id="project-name">Projetos</span><small id="project-kind"></small></button>
+    <span class="spacer"></span>
+    <button id="btn-run" class="tb act run">▶ Executar</button>
+    <button id="btn-build" class="tb act">🔨 Compilar</button>
+    <button id="btn-test" class="tb act">✔ Testar</button>
+    <button id="btn-stop" class="tb act stop">■ Parar</button>
+    <button id="btn-panel" class="tb" aria-label="Painel">▤</button>
+    <button id="btn-settings" class="tb" aria-label="Configurações">⚙</button>
+  </header>
+
+  <div id="main">
+    <aside id="sidebar">
+      <div class="side-head">
+        <span>ARQUIVOS</span>
+        <span class="side-btns">
+          <button id="tree-newfile" class="mini" aria-label="Novo arquivo">＋📄</button>
+          <button id="tree-newdir" class="mini" aria-label="Nova pasta">＋📁</button>
+          <button id="tree-refresh" class="mini" aria-label="Atualizar">↻</button>
+        </span>
+      </div>
+      <div id="tree"></div>
+    </aside>
+
+    <section id="editor-area">
+      <div id="tabrow">
+        <div id="tabs"></div>
+        <div id="editor-actions"></div>
+      </div>
+      <div id="editor-wrap">
+        <div id="editor"></div>
+        <div id="welcome">
+          <h1>CodeDroid Java</h1>
+          <p>Uma IDE Java completa dentro do celular: JDK 25, Maven, Gradle e servidor de linguagem.</p>
+          <div class="welcome-btns">
+            <button id="welcome-new" class="btn primary">Novo projeto</button>
+            <button id="welcome-open" class="btn">Abrir projeto</button>
+          </div>
+          <p class="dim">Depois de criar um projeto, toque em <b>▶ Executar</b>. Na primeira vez o Maven/Gradle baixa dependências (precisa de internet).</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section id="panel">
+    <div id="panel-tabs">
+      <button class="ptab active" data-p="console">Console</button>
+      <button class="ptab" data-p="problems" id="ptab-problems">Problemas</button>
+      <button class="ptab" data-p="terminal">Terminal</button>
+      <span class="spacer"></span>
+      <button id="panel-clear" class="mini">Limpar</button>
+    </div>
+    <div id="panel-body">
+      <div class="pane active" id="pane-console">
+        <div id="console-out" class="out"></div>
+        <div id="console-input-row" class="inrow" style="display:none">
+          <span class="prompt">entrada›</span>
+          <input id="console-input" class="input" placeholder="Digite e pressione Enter (para o programa em execução)" autocapitalize="off" autocomplete="off" spellcheck="false">
+          <button id="console-send" class="mini">Enviar</button>
+        </div>
+      </div>
+      <div class="pane" id="pane-problems"></div>
+      <div class="pane" id="pane-terminal">
+        <div id="term-out" class="out"></div>
+        <div class="inrow">
+          <span class="prompt" id="term-prompt">~$</span>
+          <input id="term-input" class="input" placeholder="comando…" autocapitalize="off" autocomplete="off" spellcheck="false">
+          <button id="term-up" class="mini">↑</button>
+          <button id="term-run" class="mini">Enter</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer id="statusbar">
+    <span id="st-lsp">Java: —</span>
+    <button id="st-problems" class="st-btn">✖ 0  ⚠ 0</button>
+    <span class="spacer"></span>
+    <span id="st-pos"></span>
+  </footer>
+
+  <div id="symbolbar"></div>
+</div>
+
+<div id="modal-root"></div>
+<div id="toast"></div>
+
+<script src="monaco/vs/loader.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

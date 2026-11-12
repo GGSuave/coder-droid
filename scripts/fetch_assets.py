@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Downloads and stages every binary that gets embedded in the APK.
-Baixa e prepara todos os binarios embutidos no APK.
+Downloads and stages every binary/asset that gets embedded in the APK.
+Baixa e prepara todos os binarios/assets embutidos no APK.
 
 None of these files are committed to the repository (they total hundreds of MB and GitHub
 rejects files over 100 MB), so run this once before building:
@@ -11,49 +11,46 @@ Nada disso vai para o Git (sao centenas de MB e o GitHub rejeita arquivos > 100 
     python scripts/fetch_assets.py --abi arm64  # phones and tablets / celulares e tablets
     python scripts/fetch_assets.py --abi x64    # emulator / emulador
 
-Needs Python 3.9+ and internet. Python 3.14+ (or `pip install zstandard`) is required to
-read Ubuntu's .zst packages.
+Needs Python 3.9+ and internet.
 """
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import io
 import re
+import shutil
 import sys
 import tarfile
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
-from typing import Callable, Union
 
 # ---------------------------------------------------------------- pinned versions
 UBUNTU_BASE = "24.04.5"   # https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/
-CODE_SERVER = "4.145.2"   # https://github.com/coder/code-server/releases
-NODE = "26.13.1"          # https://nodejs.org/dist/  (LTS line)
-GH_CLI = "2.103.3"        # https://github.com/cli/cli/releases
+JDK = "25.0.5"            # Temurin LTS, https://adoptium.net/ (build 8)
+JDK_BUILD = "8"
+MAVEN = "3.9.16"          # https://archive.apache.org/dist/maven/maven-3/
+GRADLE = "9.9.1"          # https://services.gradle.org/distributions/
+JDTLS = "jdt-language-server-1.64.0-202611091900.tar.gz"  # https://download.eclipse.org/jdtls/snapshots/
+MONACO = "0.57.0"         # https://www.npmjs.com/package/monaco-editor
 CA_BUNDLE_URL = "https://curl.se/ca/cacert.pem"
 TERMUX_POOL = "https://packages.termux.dev/apt/termux-main/pool/main"
 
 # flavor = Gradle product flavor; abi = jniLibs folder; the rest are each vendor's arch name
 ABIS = {
-    "arm64": dict(flavor="arm64", abi="arm64-v8a", ubuntu="arm64", cs="arm64", node="arm64",
-                  gh="arm64", termux="aarch64", deb_arch="arm64",
-                  gcc_pool="https://ports.ubuntu.com/ubuntu-ports/pool/main/g/gcc-14/"),
-    "x64":   dict(flavor="x64", abi="x86_64", ubuntu="amd64", cs="amd64", node="x64",
-                  gh="amd64", termux="x86_64", deb_arch="amd64",
-                  gcc_pool="https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-14/"),
+    "arm64": dict(flavor="arm64", abi="arm64-v8a", ubuntu="arm64", jdk="aarch64", termux="aarch64"),
+    "x64":   dict(flavor="x64", abi="x86_64", ubuntu="amd64", jdk="x64", termux="x86_64"),
 }
 
-UA = {"User-Agent": "codedroid-fetch-assets/1.0"}
-Match = Union[str, Callable[[str], bool]]
-
-
-# ---------------------------------------------------------------------- helpers
+UA = {"User-Agent": "codedroid-java-fetch-assets/1.0"}
 TIMEOUT = 120   # seconds; some mirrors are slow
 RETRIES = 5
 
 
+# ---------------------------------------------------------------------- helpers
 def http_get(url: str, retries: int = RETRIES) -> bytes:
     last: Exception | None = None
     for attempt in range(retries):
@@ -93,65 +90,40 @@ def download(url: str, dest: Path, force: bool) -> None:
     raise RuntimeError(f"download failed: {url}: {last}")
 
 
-def latest_deb(pool_dir_url: str, package: str, arch: str, contains: str = "", fallback: str = "") -> str:
-    """
-    Newest <package>_<version>_<arch>.deb listed in an apt pool directory. If the listing cannot
-    be fetched or parsed, `fallback` (a known-good "<version>") is used instead.
-    """
+def latest_deb(pool_dir_url: str, package: str, arch: str, fallback: str) -> str:
+    """Newest <package>_<version>_<arch>.deb listed in an apt pool dir; `fallback` is a known-good version."""
     try:
         html = http_get(pool_dir_url).decode("utf-8", "replace")
         names = sorted(set(re.findall(rf'href="({re.escape(package)}_[^"]*_{arch}\.deb)"', html)))
-        names = [n for n in names if contains in n]
         if names:
             return names[-1]
     except RuntimeError as e:
         print(f"  ! could not list {pool_dir_url}: {e}")
-    if not fallback:
-        raise RuntimeError(f"no {package} for {arch} at {pool_dir_url}")
     print(f"  ! using pinned {package} {fallback}")
     return f"{package}_{fallback}_{arch}.deb"
 
 
-def deb_data_tar(deb: bytes) -> tarfile.TarFile:
-    """Opens the data.tar.* member of a .deb (an `ar` archive) as a TarFile."""
+def deb_extract(deb: bytes, match) -> bytes:
+    """Bytes of the first regular file in the .deb (data.tar.xz) whose path ends with / satisfies `match`."""
     if not deb.startswith(b"!<arch>\n"):
         raise ValueError("not a .deb file")
+    test = (lambda n: n.endswith(match)) if isinstance(match, str) else match
     pos = 8
     while pos + 60 <= len(deb):
-        name = deb[pos:pos + 16].decode().strip()
+        name = deb[pos:pos + 16].decode().strip().rstrip("/")  # GNU ar termina o nome com "/"
         size = int(deb[pos + 48:pos + 58].decode().strip())
         body = deb[pos + 60:pos + 60 + size]
         pos += 60 + size + (size & 1)
         if not name.startswith("data.tar"):
             continue
-        if name.endswith(".xz"):
-            return tarfile.open(fileobj=io.BytesIO(body), mode="r:xz")
-        if name.endswith(".gz"):
-            return tarfile.open(fileobj=io.BytesIO(body), mode="r:gz")
-        if name.endswith(".zst"):
-            try:
-                from compression import zstd  # Python 3.14+
-                return tarfile.open(fileobj=io.BytesIO(zstd.decompress(body)), mode="r:")
-            except ImportError:
-                try:
-                    import zstandard  # type: ignore
-                    raw = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(body)).read()
-                    return tarfile.open(fileobj=io.BytesIO(raw), mode="r:")
-                except ImportError:
-                    sys.exit("Reading .zst packages needs Python 3.14+ or `pip install zstandard`.")
-        raise ValueError(f"unsupported data member: {name}")
-    raise ValueError("no data.tar.* in .deb")
-
-
-def deb_extract(deb: bytes, match: Match) -> bytes:
-    """Bytes of the first regular file in the .deb whose path ends with `match` (or satisfies it)."""
-    test = (lambda n: n.endswith(match)) if isinstance(match, str) else match
-    with deb_data_tar(deb) as tf:
-        for m in tf.getmembers():
-            if m.isfile() and test(m.name):
-                f = tf.extractfile(m)
-                assert f is not None
-                return f.read()
+        if not name.endswith((".xz", ".gz")):
+            sys.exit(f"Unsupported package compression: {name}")
+        with tarfile.open(fileobj=io.BytesIO(body), mode="r:xz" if name.endswith(".xz") else "r:gz") as tf:
+            for m in tf.getmembers():
+                if m.isfile() and test(m.name):
+                    f = tf.extractfile(m)
+                    assert f is not None
+                    return f.read()
     raise FileNotFoundError(str(match))
 
 
@@ -162,28 +134,91 @@ def write(path: Path, data: bytes) -> None:
 
 
 # ------------------------------------------------------------------------ stages
-def stage_big_assets(root: Path, a: dict, force: bool) -> None:
+def stage_arch_assets(root: Path, a: dict, force: bool) -> None:
     assets = root / "app" / "src" / a["flavor"] / "assets"
     download(f"https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/"
              f"ubuntu-base-{UBUNTU_BASE}-base-{a['ubuntu']}.tar.gz", assets / "rootfs.bin", force)
-    download(f"https://github.com/coder/code-server/releases/download/v{CODE_SERVER}/"
-             f"code-server-{CODE_SERVER}-linux-{a['cs']}.tar.gz", assets / "code-server.bin", force)
-    download(f"https://nodejs.org/dist/v{NODE}/node-v{NODE}-linux-{a['node']}.tar.gz", assets / "node.bin", force)
-    download(f"https://github.com/cli/cli/releases/download/v{GH_CLI}/gh_{GH_CLI}_linux_{a['gh']}.tar.gz",
-             assets / "gh.bin", force)
+    download(f"https://github.com/adoptium/temurin25-binaries/releases/download/jdk-{JDK}%2B{JDK_BUILD}/"
+             f"OpenJDK25U-jdk_{a['jdk']}_linux_hotspot_{JDK}_{JDK_BUILD}.tar.gz", assets / "jdk.bin", force)
 
 
-def stage_libatomic(root: Path, a: dict, force: bool) -> None:
-    """Node's official build needs libatomic.so.1, which minimal Ubuntu does not ship."""
-    dest = root / "app" / "src" / a["flavor"] / "assets" / "libatomic.so.1"
-    if dest.exists() and not force:
-        print(f"  = {dest.name} (already there)")
+def zip_to_targz(zip_path: Path, out_path: Path) -> None:
+    """Repacks a .zip as .tar.gz (keeping unix modes), the format the app's installer reads."""
+    print(f"  repacking {zip_path.name} -> {out_path.name}")
+    tmp = out_path.with_name(out_path.name + ".part")
+    with zipfile.ZipFile(zip_path) as zf, gzip.GzipFile(tmp, "wb", compresslevel=6) as gz, \
+            tarfile.open(fileobj=gz, mode="w", format=tarfile.GNU_FORMAT) as tf:
+        for info in zf.infolist():
+            ti = tarfile.TarInfo(info.filename.rstrip("/"))
+            mode = (info.external_attr >> 16) & 0o7777
+            ti.mtime = time.mktime(info.date_time + (0, 0, -1))
+            if info.is_dir():
+                ti.type = tarfile.DIRTYPE
+                ti.mode = mode or 0o755
+                tf.addfile(ti)
+            else:
+                data = zf.read(info)
+                ti.size = len(data)
+                ti.mode = mode or 0o644
+                tf.addfile(ti, io.BytesIO(data))
+    tmp.replace(out_path)
+
+
+def stage_shared_assets(root: Path, force: bool) -> None:
+    assets = root / "app" / "src" / "main" / "assets"
+    download(f"https://archive.apache.org/dist/maven/maven-3/{MAVEN}/binaries/apache-maven-{MAVEN}-bin.tar.gz",
+             assets / "maven.bin", force)
+    download(f"https://download.eclipse.org/jdtls/snapshots/{JDTLS}", assets / "jdtls.bin", force)
+
+    gradle = assets / "gradle.bin"
+    if gradle.exists() and not force:
+        print(f"  = {gradle.name} (already there)")
+    else:
+        zpath = root / "app" / "build" / "tmp-fetch" / f"gradle-{GRADLE}-bin.zip"
+        download(f"https://services.gradle.org/distributions/gradle-{GRADLE}-bin.zip", zpath, force)
+        zip_to_targz(zpath, gradle)
+        shutil.rmtree(zpath.parent, ignore_errors=True)
+
+    download(CA_BUNDLE_URL, assets / "ca-certificates.crt", force)
+
+
+def stage_monaco(root: Path, force: bool) -> None:
+    """Vendors the Monaco editor (AMD build, no bundler needed). Language services are not needed."""
+    dest = root / "app" / "src" / "main" / "assets" / "web" / "monaco"
+    if (dest / "vs" / "loader.js").exists() and not force:
+        print("  = monaco (already there)")
         return
-    name = latest_deb(a["gcc_pool"], "libatomic1", a["deb_arch"], contains="24.04",
-                      fallback="14.2.0-4ubuntu2~24.04.1")
-    print(f"  v {name}")
-    so = deb_extract(http_get(a["gcc_pool"] + name), lambda n: re.search(r"/libatomic\.so\.1\.\d+\.\d+$", n) is not None)
-    write(dest, so)
+    shutil.rmtree(dest, ignore_errors=True)
+    print(f"  v monaco-editor {MONACO}")
+    data = http_get(f"https://registry.npmjs.org/monaco-editor/-/monaco-editor-{MONACO}.tgz")
+    count = 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+        for m in tf.getmembers():
+            if not m.isfile():
+                continue
+            n = m.name
+            if n == "package/LICENSE":
+                target = dest / "LICENSE"
+            elif n.startswith("package/min/vs/") and not n.endswith(".map") and "/language/" not in n:
+                target = dest / n[len("package/min/"):]
+            else:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            f = tf.extractfile(m)
+            assert f is not None
+            target.write_bytes(f.read())
+            count += 1
+    # Workers are ES modules with hashed names. Give the editor worker a stable name, and drop the
+    # language-service workers (TypeScript/HTML/JSON/CSS, ~9 MB): the IDE never creates them.
+    assets = dest / "vs" / "assets"
+    workers = sorted(assets.glob("editor.worker-*.js"))
+    if not workers:
+        sys.exit("Monaco layout changed: editor worker not found; update stage_monaco().")
+    shutil.copyfile(workers[0], assets / "editor.worker.js")
+    for pattern in ("ts.worker-*.js", "html.worker-*.js", "json.worker-*.js", "css.worker-*.js"):
+        for f in assets.glob(pattern):
+            f.unlink()
+    print(f"  + {count} files ({sum(p.stat().st_size for p in dest.rglob('*') if p.is_file()) / 1e6:.1f} MB)")
 
 
 def stage_proot(root: Path, a: dict, force: bool) -> None:
@@ -199,7 +234,7 @@ def stage_proot(root: Path, a: dict, force: bool) -> None:
     t = a["termux"]
 
     def deb(pool: str, pkg: str, fallback: str) -> bytes:
-        name = latest_deb(f"{TERMUX_POOL}/{pool}/", pkg, t, fallback=fallback)
+        name = latest_deb(f"{TERMUX_POOL}/{pool}/", pkg, t, fallback)
         print(f"  v {name}")
         return http_get(f"{TERMUX_POOL}/{pool}/{name}")
 
@@ -222,10 +257,6 @@ def stage_proot(root: Path, a: dict, force: bool) -> None:
         write(out / fname, data)
 
 
-def stage_ca_bundle(root: Path, force: bool) -> None:
-    download(CA_BUNDLE_URL, root / "app" / "src" / "main" / "assets" / "ca-certificates.crt", force)
-
-
 def sha256(p: Path) -> str:
     h = hashlib.sha256()
     with open(p, "rb") as f:
@@ -246,20 +277,20 @@ def main() -> None:
     root: Path = args.dest
     print(f"Project root: {root}")
 
-    print("\n[shared] CA certificates")
-    stage_ca_bundle(root, args.force)
+    print("\n[shared] Maven, Gradle, JDT LS, CA certificates")
+    stage_shared_assets(root, args.force)
+    print("\n[shared] Monaco editor")
+    stage_monaco(root, args.force)
     for name in targets:
         a = ABIS[name]
         print(f"\n[{name}] proot libraries")
         stage_proot(root, a, args.force)
-        print(f"[{name}] libatomic")
-        stage_libatomic(root, a, args.force)
-        print(f"[{name}] rootfs, code-server, Node.js, GitHub CLI")
-        stage_big_assets(root, a, args.force)
+        print(f"[{name}] Ubuntu base + JDK {JDK}")
+        stage_arch_assets(root, a, args.force)
 
-    print("\nStaged files:")
+    print("\nStaged files (big ones):")
     for p in sorted((root / "app" / "src").rglob("*")):
-        if p.is_file() and ("assets" in p.parts or "jniLibs" in p.parts):
+        if p.is_file() and ("assets" in p.parts or "jniLibs" in p.parts) and "monaco" not in p.parts:
             print(f"  {p.relative_to(root)}  {p.stat().st_size / 1e6:8.2f} MB  sha256:{sha256(p)}")
     print("\nDone. Next: ./gradlew :app:assembleArm64Debug   (see README)")
 

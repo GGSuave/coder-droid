@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">CodeDroid</string>
-    <string name="notif_channel">Servidor do editor</string>
-    <string name="notif_title">CodeDroid em execução</string>
-    <string name="notif_text">O servidor do editor está ativo</string>
+    <string name="app_name">CodeDroid Java</string>
+    <string name="notif_channel">Ambiente Java</string>
+    <string name="notif_title">CodeDroid Java em execução</string>
+    <string name="notif_text">O ambiente Java está ativo</string>
     <string name="notif_stop">Parar</string>
 </resources>
