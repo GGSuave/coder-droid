@@ -300,6 +300,7 @@ class MainActivity : Activity() {
         key("Colar", KeyEvent.KEYCODE_INSERT, shift = true)
         key("Esc", KeyEvent.KEYCODE_ESCAPE)
         key("Tab", KeyEvent.KEYCODE_TAB)
+        key("Sug", KeyEvent.KEYCODE_SPACE, ctrl = true) // Ctrl+Espaco: o Android consome o fisico
         key("^C", KeyEvent.KEYCODE_C, ctrl = true)
         key("^D", KeyEvent.KEYCODE_D, ctrl = true)
         key("^L", KeyEvent.KEYCODE_L, ctrl = true)
@@ -386,7 +387,7 @@ class MainActivity : Activity() {
                 if (!Installer.isInstalled(env)) {
                     Installer.install(applicationContext, env) { m, p -> setStatus(m, p) }
                 }
-                Installer.ensureExtras(applicationContext, env) { m, p -> setStatus(m, p) }
+                Installer.ensureExtras(applicationContext, env)
                 setStatus("Iniciando servidor…")
                 if (!ServerService.isRunning()) ServerService.start(applicationContext)
                 waitForServer()
@@ -399,12 +400,28 @@ class MainActivity : Activity() {
                     web.requestFocus()
                     askBatteryExemption()
                 }
+                installLatePackages()
             } catch (e: Throwable) {
                 showError("Erro: ${e.message ?: e.javaClass.simpleName}\n\n${logTail()}")
             } finally {
                 booting = false
             }
         }
+    }
+
+    /** git/curl via apt: roda com o editor ja aberto, para nao atrasar a partida. */
+    private fun installLatePackages() {
+        runCatching {
+            Installer.ensureLate(
+                applicationContext, env,
+                onInstalling = { pk -> toast("Instalando ${pk.joinToString(" e ")} em segundo plano…") },
+                onDone = { ok -> toast(if (ok) "Pacotes instalados." else "Falha ao instalar pacotes (veja git-install.log).") },
+            )
+        }
+    }
+
+    private fun toast(msg: String) = ui.post {
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun waitForServer() {
@@ -419,7 +436,7 @@ class MainActivity : Activity() {
             if (isHealthy()) return
             val secs = (System.currentTimeMillis() - started) / 1000
             setStatus("Iniciando servidor… (${secs}s)")
-            Thread.sleep(700)
+            Thread.sleep(250)
         }
         throw IllegalStateException("Tempo esgotado esperando o servidor")
     }

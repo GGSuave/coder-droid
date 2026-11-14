@@ -20,8 +20,8 @@ android {
         // Mantido em 28 de proposito: apps com targetSdk >= 29 nao podem dar exec em
         // binarios que estejam no armazenamento interno (W^X). Mesma estrategia do Termux.
         targetSdk = 28
-        versionCode = 7
-        versionName = "0.3.3"
+        versionCode = 8
+        versionName = "0.3.4"
     }
 
     signingConfigs {

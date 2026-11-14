@@ -140,18 +140,35 @@ object Installer {
 
     // ---------------------------------------------------------------- config
 
-    // Configuracoes de Git/GitHub: o VS Code injeta o proprio GIT_ASKPASS nos terminais, o que
-    // faz `git pull` abrir um modal em vez de perguntar no terminal. Desligado por padrao.
-    private val GIT_SETTINGS = mapOf<String, Any>(
+    // Git/GitHub: o VS Code injeta o proprio GIT_ASKPASS nos terminais, o que faz `git pull` abrir
+    // um modal em vez de perguntar no terminal. Desligado por padrao.
+    // Desempenho: menos trabalho em segundo plano e menos pintura no celular.
+    private val DEFAULT_SETTINGS = mapOf<String, Any>(
         "git.terminalAuthentication" to false,
         "github.gitAuthentication" to false,
+        "terminal.integrated.copyOnSelection" to true,
+        "editor.minimap.enabled" to false,
+        "editor.smoothScrolling" to false,
+        "editor.cursorSmoothCaretAnimation" to "off",
+        "workbench.list.smoothScrolling" to false,
+        "terminal.integrated.smoothScrolling" to false,
+        "workbench.enableExperiments" to false,
+        "extensions.autoCheckUpdates" to false,
+        "extensions.ignoreRecommendations" to true,
+        "git.openRepositoryInParentFolders" to "never",
+        "typescript.disableAutomaticTypeAcquisition" to true,
+        "search.followSymlinks" to false,
     )
 
     /**
      * Componentes acrescentados depois da instalacao base. Sao aplicados sem refazer o rootfs,
      * para nao apagar o que o usuario instalou com apt.
+     *
+     * Esta parte e RAPIDA (so arquivos locais) e roda antes de o servidor subir, porque mexe em
+     * configuracoes e extensoes que o VS Code le na partida. O que demora (gh, apt) fica em
+     * [ensureLate], que roda em segundo plano com o editor ja aberto.
      */
-    fun ensureExtras(ctx: Context, env: Env, onProgress: (message: String, percent: Int?) -> Unit) {
+    fun ensureExtras(ctx: Context, env: Env) {
         // 1. Certificados raiz (o Ubuntu Base minimo nao traz; gh e git precisam para HTTPS)
         val ca = File(env.rootfs, "etc/ssl/certs/ca-certificates.crt")
         if (!ca.exists() || ca.length() == 0L) {
@@ -160,14 +177,12 @@ object Installer {
             runCatching { Os.chmod(ca.path, 0x1A4) }
         }
 
-        // 2. GitHub CLI (login por codigo dentro do terminal)
-        if (!File(env.rootfs, "usr/local/bin/gh").exists()) {
-            extract(ctx, "gh.bin", File(env.rootfs, "usr/local"), strip = 1, label = "Instalando GitHub CLI", base = 0, span = 100) { m, p -> onProgress(m, p) }
-        }
-
-        // 3. Ajustes do VS Code para Git (acrescenta so as chaves que faltam)
+        // 2. Ajustes do VS Code (acrescenta so as chaves que faltam)
         val settings = File(env.rootfs, "root/.local/share/code-server/User/settings.json")
-        if (settings.exists()) GIT_SETTINGS.forEach { (k, v) -> ensureSetting(settings, k, v) }
+        if (settings.exists()) DEFAULT_SETTINGS.forEach { (k, v) -> ensureSetting(settings, k, v) }
+
+        // 3. Atalhos de teclado (Ctrl+V/Ctrl+C no terminal, sugestao com Alt+Espaco)
+        ensureKeybindings(File(env.rootfs, "root/.local/share/code-server/User/keybindings.json"))
 
         // 4. Extensao embutida "GitHub": pede login com `createIfNone` (modal "conectar ao GitHub") ao
         //    clonar/publicar/listar PRs e como provedor de credenciais do git. O login aqui e feito
@@ -189,29 +204,66 @@ object Installer {
             )
             runCatching { Os.chmod(gitconfig.path, 0x1A4) }
         }
-
-        // 6. git (precisa de internet; sem rede, tenta de novo na proxima abertura)
-        ensureGit(env, onProgress)
     }
 
-    private fun ensureGit(env: Env, onProgress: (String, Int?) -> Unit) {
-        if (File(env.rootfs, "usr/bin/git").exists()) return
+    /** Parte lenta, em segundo plano: GitHub CLI (so em atualizacoes) e pacotes via apt. */
+    fun ensureLate(ctx: Context, env: Env, onInstalling: (List<String>) -> Unit, onDone: (Boolean) -> Unit) {
+        if (!File(env.rootfs, "usr/local/bin/gh").exists()) {
+            extract(ctx, "gh.bin", File(env.rootfs, "usr/local"), strip = 1, label = "gh", base = 0, span = 100) { _, _ -> }
+        }
+        val missing = APT_PACKAGES.filterNot { (_, bin) -> File(env.rootfs, bin).exists() }.map { it.first }
+        if (missing.isEmpty()) return
         val online = runCatching {
             java.net.Socket().use { it.connect(java.net.InetSocketAddress("archive.ubuntu.com", 80), 3000); true }
         }.getOrDefault(false)
-        if (!online) return
+        if (!online) return // sem rede: tenta de novo na proxima abertura
 
-        onProgress("Instalando git (primeira vez, precisa de internet)…", null)
+        onInstalling(missing)
         val log = File(env.home, "git-install.log")
         val pb = Proot.builder(
             env,
-            listOf("/bin/bash", "-c", "apt-get update -qq && apt-get install -y -qq git ca-certificates"),
+            listOf(
+                "/bin/bash", "-c",
+                "apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates ${missing.joinToString(" ")}",
+            ),
             listOf("DEBIAN_FRONTEND=noninteractive"),
         ).redirectOutput(log)
-        runCatching {
+        val ok = runCatching {
             val p = pb.start()
-            if (!p.waitFor(8, java.util.concurrent.TimeUnit.MINUTES)) p.destroyForcibly()
+            if (!p.waitFor(8, java.util.concurrent.TimeUnit.MINUTES)) { p.destroyForcibly(); false } else p.exitValue() == 0
+        }.getOrDefault(false)
+        onDone(ok)
+    }
+
+    /** Pacote apt -> arquivo que prova que ele esta instalado. */
+    private val APT_PACKAGES = listOf("git" to "usr/bin/git", "curl" to "usr/bin/curl")
+
+    /**
+     * Atalhos que o VS Code no navegador nao resolve sozinho dentro de um WebView:
+     *  - Ctrl+V cola no terminal (senao manda ^V, que o Claude Code trata como "colar imagem");
+     *  - Ctrl+C copia quando ha selecao no terminal; sem selecao continua sendo SIGINT;
+     *  - Alt+Espaco abre sugestoes (o Android consome Ctrl+Espaco para trocar de teclado).
+     */
+    private const val KB_MARK = "codedroid-managed"
+    private val KEYBINDINGS = """
+      // $KB_MARK: atalhos do CodeDroid (pode editar; apague esta linha para o app nao recriar)
+      { "key": "ctrl+v", "command": "workbench.action.terminal.paste", "when": "terminalFocus && terminalProcessSupported" },
+      { "key": "ctrl+c", "command": "workbench.action.terminal.copySelection", "when": "terminalFocus && terminalTextSelected" },
+      { "key": "alt+space", "command": "editor.action.triggerSuggest", "when": "editorHasCompletionItemProvider && textInputFocus && !editorReadonly && !suggestWidgetVisible" },
+      { "key": "alt+space", "command": "editor.action.triggerParameterHints", "when": "editorHasSignatureHelpProvider && editorTextFocus && !parameterHintsVisible" },
+    """.trimIndent()
+
+    private fun ensureKeybindings(file: File) {
+        file.parentFile?.mkdirs()
+        if (!file.exists()) {
+            file.writeText("[\n$KEYBINDINGS\n]\n")
+            return
         }
+        val text = runCatching { file.readText() }.getOrNull() ?: return
+        if (KB_MARK in text) return
+        val bracket = text.indexOf('[')
+        if (bracket < 0) return
+        file.writeText(text.substring(0, bracket + 1) + "\n" + KEYBINDINGS + text.substring(bracket + 1))
     }
 
     /** Define a chave se ainda nao existir. Se o arquivo tiver comentarios (JSONC), nao mexe. */
@@ -311,13 +363,21 @@ object Installer {
                   "terminal.integrated.defaultProfile.linux": "bash",
                   "terminal.integrated.copyOnSelection": true,
                   "git.terminalAuthentication": false,
-                  "github.gitAuthentication": false
+                  "github.gitAuthentication": false,
+                  "editor.minimap.enabled": false,
+                  "editor.smoothScrolling": false,
+                  "editor.cursorSmoothCaretAnimation": "off",
+                  "workbench.list.smoothScrolling": false,
+                  "terminal.integrated.smoothScrolling": false,
+                  "workbench.enableExperiments": false,
+                  "extensions.autoCheckUpdates": false,
+                  "extensions.ignoreRecommendations": true,
+                  "git.openRepositoryInParentFolders": "never",
+                  "typescript.disableAutomaticTypeAcquisition": true,
+                  "search.followSymlinks": false
                 }
                 """.trimIndent() + "\n",
             )
-        } else {
-            // Instalacao existente: acrescenta so o que falta, sem tocar no resto (JSON puro apenas).
-            ensureSetting(settings, "terminal.integrated.copyOnSelection", true)
         }
 
         // ~/.bashrc minimo para o terminal integrado.

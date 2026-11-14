@@ -77,7 +77,14 @@ class ServerService : Service() {
                 env,
             )
         } else {
-            Proot.builder(env, server, listOf("NODE_OPTIONS=--require=/opt/android-shim.js"))
+            Proot.builder(
+                env, server,
+                listOf(
+                    // Cache de compilacao do V8: a partida seguinte pula a compilacao do JS do VS Code.
+                    "NODE_COMPILE_CACHE=/root/.cache/node-compile-cache",
+                    "NODE_OPTIONS=--require=/opt/android-shim.js --max-old-space-size=2048",
+                ),
+            )
         }
 
         process = try {
